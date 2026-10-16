@@ -1,3 +1,5 @@
+import { config } from "dotenv";
+config({ quiet: true });
 import mysql from "mysql2/promise";
 import { randomBytes, scryptSync } from "node:crypto";
 export const pool = mysql.createPool({
@@ -49,6 +51,27 @@ export async function initDb() {
     `CREATE TABLE IF NOT EXISTS notifications (id INT AUTO_INCREMENT PRIMARY KEY, user_id INT NOT NULL, body TEXT NOT NULL, read_at DATETIME, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(user_id) REFERENCES users(id))`,
   ];
   for (const sql of statements) await query(sql);
+  // Additive migration: keep existing accounts and require verification for real emails.
+  const columns = await query("SHOW COLUMNS FROM users");
+  const names = new Set(columns.map((c) => c.Field));
+  if (!names.has("email_verified"))
+    await query(
+      "ALTER TABLE users ADD COLUMN email_verified BOOLEAN NOT NULL DEFAULT FALSE",
+    );
+  if (!names.has("google_sub"))
+    await query(
+      "ALTER TABLE users ADD COLUMN google_sub VARCHAR(255) NULL UNIQUE",
+    );
+  if (!names.has("password_login_enabled"))
+    await query(
+      "ALTER TABLE users ADD COLUMN password_login_enabled BOOLEAN NOT NULL DEFAULT TRUE",
+    );
+  await query(
+    "CREATE TABLE IF NOT EXISTS email_verifications (id INT AUTO_INCREMENT PRIMARY KEY,user_id INT NOT NULL,token_hash CHAR(64) NOT NULL UNIQUE,expires_at DATETIME NOT NULL,used_at DATETIME,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE)",
+  );
+  await query(
+    "CREATE TABLE IF NOT EXISTS oauth_attempts (state_hash CHAR(64) PRIMARY KEY,browser_hash CHAR(64) NOT NULL,nonce CHAR(64) NOT NULL,verifier VARCHAR(200) NOT NULL,role VARCHAR(20) NOT NULL,expires_at DATETIME NOT NULL)",
+  );
   if (
     process.env.SEED_DEMO !== "false" &&
     !(await query("SELECT id FROM users LIMIT 1")).length

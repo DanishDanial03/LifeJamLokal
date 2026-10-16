@@ -34,7 +34,7 @@ try {
   await page.getByText("Profile updated.", { exact: false }).waitFor();
   await page.goto("http://127.0.0.1:3000/#profile/2");
   await page
-    .getByRole("heading", { name: "Amir Hakim", exact: true })
+    .getByRole("heading", { name: "Amir Hakim", exact: true, level: 1 })
     .waitFor();
   for (const tab of ["About", "Portfolio", "Reviews", "Availability"]) {
     await page

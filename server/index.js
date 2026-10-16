@@ -1,4 +1,17 @@
 import express from "express";
+import {
+  createPendingAccount,
+  maySignIn,
+  mailConfigured,
+  googleConfigured,
+  sendVerification,
+  consumeVerification,
+  beginGoogle,
+  consumeGoogleAttempt,
+  googleClient,
+  googleAccount,
+  appUrl,
+} from "./account-auth.js";
 import { keywordRank } from "./search.js";
 import multer from "multer";
 import {
@@ -13,6 +26,7 @@ import { fileURLToPath } from "node:url";
 import { initDb, query, pool, parse, profile, hashPassword } from "./db.js";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 await mkdir(path.join(root, "data/uploads"), { recursive: true });
+appUrl();
 await initDb();
 export const app = express();
 app.disable("x-powered-by");
@@ -57,7 +71,7 @@ const id = (v) => {
 const notify = (user, body) =>
   query("INSERT INTO notifications (user_id,body) VALUES (?,?)", [user, body]);
 const publicUser = (u) => {
-  const { password, ...rest } = u;
+  const { password, google_sub, ...rest } = u;
   return { ...rest, suspended: !!u.suspended };
 };
 app.use(
@@ -73,7 +87,8 @@ app.use(
         "SELECT u.* FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token=? AND s.expires_at>NOW()",
         [createHash("sha256").update(cookie).digest("hex")],
       );
-      if (rows[0] && !rows[0].suspended) req.user = publicUser(rows[0]);
+      if (rows[0] && !rows[0].suspended && maySignIn(rows[0]))
+        req.user = publicUser(rows[0]);
     }
     next();
   }),
@@ -137,7 +152,11 @@ app.get(
   }),
 );
 app.get("/api/config", (req, res) =>
-  res.json({ demo: process.env.SEED_DEMO !== "false" }),
+  res.json({
+    demo: process.env.SEED_DEMO !== "false",
+    googleSignIn: googleConfigured(),
+    emailVerification: mailConfigured(),
+  }),
 );
 app.get("/api/me", (req, res) => res.json({ user: req.user || null }));
 app.post(
@@ -158,37 +177,37 @@ app.post(
       fail(
         "Enter a name, valid email, role, and password of 10–128 characters.",
       );
-    if ((await query("SELECT id FROM users WHERE email=?", [email])).length)
-      fail("An account with this email already exists.", 409);
-    const result = await query(
-      "INSERT INTO users (name,email,password,role,location,bio) VALUES (?,?,?,?,?,?)",
-      [
-        name,
-        email,
-        hashPassword(password),
-        roleName,
-        text(req.body.location, 100) || "Kuala Lumpur",
-        "",
-      ],
-    );
-    if (roleName === "musician")
-      await query(
-        "INSERT INTO profiles (user_id,headline,description,genres,skills,portfolio,availability) VALUES (?,?,?,?,?,?,?)",
-        [
-          result.insertId,
-          "Musician",
-          "",
-          JSON.stringify([]),
-          JSON.stringify([]),
-          JSON.stringify([]),
-          JSON.stringify([]),
-        ],
+    if (!mailConfigured())
+      fail(
+        "Email verification is not configured yet. Please contact the site administrator.",
+        503,
       );
-    await session(res, result.insertId);
-    res.status(201).json({
-      user: publicUser(
-        (await query("SELECT * FROM users WHERE id=?", [result.insertId]))[0],
-      ),
+    if ((await query("SELECT id FROM users WHERE email=?", [email])).length)
+      fail(
+        "An account with this email already exists. Sign in or resend its verification email.",
+        409,
+      );
+    const user = await createPendingAccount({
+      name,
+      email,
+      password,
+      role: roleName,
+      location: text(req.body.location, 100) || "Kuala Lumpur",
+    });
+    // Account stays pending if delivery fails; the user can resend from sign-in.
+    try {
+      await sendVerification(user);
+    } catch (e) {
+      return res.status(e.status || 502).json({
+        error: e.message,
+        code: "VERIFICATION_DELIVERY_FAILED",
+        email,
+      });
+    }
+    res.status(202).json({
+      verificationRequired: true,
+      email,
+      message: "Check your inbox and confirm your email before signing in.",
     });
   }),
 );
@@ -201,7 +220,12 @@ app.post(
       ])
     )[0];
     const pw = req.body.password;
-    if (!u || typeof pw !== "string" || pw.length > 128)
+    if (
+      !u ||
+      !u.password_login_enabled ||
+      typeof pw !== "string" ||
+      pw.length > 128
+    )
       fail("Email or password is incorrect.", 401);
     const [salt, hashed] = u.password.split(":");
     if (!timingSafeEqual(Buffer.from(hashed, "hex"), scryptSync(pw, salt, 64)))
@@ -211,10 +235,107 @@ app.post(
         "This account is suspended. Contact the platform administrator.",
         403,
       );
+    if (!maySignIn(u))
+      return res.status(403).json({
+        error:
+          "Please verify your email before signing in. You can request a new verification email below.",
+        code: "EMAIL_NOT_VERIFIED",
+      });
     await session(res, u.id);
     res.json({ user: publicUser(u) });
   }),
 );
+app.post(
+  "/api/auth/resend-verification",
+  wrap(async (req, res) => {
+    const email = text(req.body.email, 190).toLowerCase();
+    if (!/^\S+@\S+\.\S+$/.test(email)) fail("Enter your email address.");
+    if (!mailConfigured())
+      fail(
+        "Verification email is not configured yet. Please contact the site administrator.",
+        503,
+      );
+    const user = (await query("SELECT * FROM users WHERE email=?", [email]))[0];
+    if (user && !user.suspended && !user.email_verified)
+      try {
+        await sendVerification(user);
+      } catch (e) {
+        return res.status(e.status || 502).json({
+          error: e.message,
+          code: "VERIFICATION_DELIVERY_FAILED",
+          email,
+        });
+      }
+    res.status(202).json({
+      message:
+        "If this address needs verification, an email has been sent. Check your inbox or spam folder. Please wait 60 seconds before trying again.",
+    });
+  }),
+);
+app.post(
+  "/api/auth/verify-email",
+  wrap(async (req, res) => {
+    await consumeVerification(req.body.token);
+    res.json({ message: "Your email is verified. You can now sign in." });
+  }),
+);
+app.get(
+  "/api/auth/google/start",
+  wrap(async (req, res) => {
+    const { url, browserToken } = await beginGoogle(
+      req.query.role || "organizer",
+    );
+    res.cookie("lifejam_oauth", browserToken, {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: process.env.COOKIE_SECURE === "true",
+      path: "/api/auth/google/callback",
+      maxAge: 600000,
+    });
+    res.redirect(url);
+  }),
+);
+app.get("/api/auth/google/callback", async (req, res) => {
+  try {
+    const browserToken = req.headers.cookie
+      ?.split(";")
+      .map((v) => v.trim())
+      .find((v) => v.startsWith("lifejam_oauth="))
+      ?.slice("lifejam_oauth=".length);
+    const attempt = await consumeGoogleAttempt(req.query.state, browserToken);
+    res.clearCookie("lifejam_oauth", { path: "/api/auth/google/callback" });
+    if (req.query.error) throw Error("Google sign-in was cancelled.");
+    if (typeof req.query.code !== "string")
+      throw Error("Google did not return an authorization code.");
+    const client = googleClient();
+    const { tokens } = await client.getToken({
+      code: req.query.code,
+      codeVerifier: attempt.verifier,
+    });
+    if (!tokens.id_token) throw Error("Google did not return an ID token.");
+    const ticket = await client.verifyIdToken({
+      idToken: tokens.id_token,
+      audience: process.env.GOOGLE_CLIENT_ID,
+    });
+    const payload = ticket.getPayload();
+    if (!payload || payload.nonce !== attempt.nonce)
+      throw Error("Invalid Google nonce.");
+    const user = await googleAccount(payload, attempt.role);
+    await session(res, user.id);
+    res.redirect(appUrl() + "/#auth-result/success");
+  } catch (e) {
+    res.clearCookie("lifejam_oauth", { path: "/api/auth/google/callback" });
+    res.redirect(
+      appUrl() +
+        "/#auth-result/error/" +
+        encodeURIComponent(
+          e.status
+            ? e.message
+            : "Google sign-in could not be completed. Please try again.",
+        ),
+    );
+  }
+});
 app.post(
   "/api/auth/logout",
   wrap(async (req, res) => {
@@ -231,7 +352,7 @@ app.post(
     res.json({ ok: true });
   }),
 );
-const musicianSql = `SELECT p.*,u.name,u.avatar,u.location,u.bio,COALESCE((SELECT AVG(r.rating) FROM reviews r WHERE r.musician_id=u.id AND r.hidden=FALSE),0) rating,(SELECT COUNT(*) FROM reviews r WHERE r.musician_id=u.id AND r.hidden=FALSE) review_count FROM profiles p JOIN users u ON p.user_id=u.id WHERE p.hidden=FALSE AND u.suspended=FALSE`;
+const musicianSql = `SELECT p.*,u.name,u.avatar,u.location,u.bio,COALESCE((SELECT AVG(r.rating) FROM reviews r WHERE r.musician_id=u.id AND r.hidden=FALSE),0) rating,(SELECT COUNT(*) FROM reviews r WHERE r.musician_id=u.id AND r.hidden=FALSE) review_count FROM profiles p JOIN users u ON p.user_id=u.id WHERE p.hidden=FALSE AND u.suspended=FALSE AND (u.email_verified=TRUE ${process.env.SEED_DEMO !== "false" ? "OR u.email IN ('amir@lifejam.local','daniel@lifejam.local','sarah@lifejam.local','nadia@lifejam.local','midnight@lifejam.local','rizal@lifejam.local')" : ""})`;
 app.get(
   "/api/musicians",
   wrap(async (req, res) => {

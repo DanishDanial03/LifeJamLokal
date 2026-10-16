@@ -13,7 +13,12 @@ export async function api(url, options = {}) {
         : {}),
   });
   const data = await r.json();
-  if (!r.ok) throw new Error(data.error || "Unable to complete the request.");
+  if (!r.ok) {
+    const error = new Error(data.error || "Unable to complete the request.");
+    error.code = data.code;
+    error.status = r.status;
+    throw error;
+  }
   return data;
 }
 export const money = (v) => "RM " + Number(v || 0).toLocaleString("en-MY");

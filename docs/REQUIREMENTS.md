@@ -4,7 +4,7 @@ Source: uploaded **LifeJamLokal_Progress_2 (17)_Updated.pdf**, scope §1.6, Tabl
 
 | ID | Thesis requirement | Implementation / verification |
 |---|---|---|
-| FR1 | Email/password registration | Organizer/musician registration; scrypt password hashing; API test |
+| FR1 | Email/password registration | Organizer/musician registration; scrypt password hashing; email confirmation required for real password accounts; optional verified Gmail OAuth; API tests |
 | FR2 | Secure login | HttpOnly SameSite sessions with hashed tokens, expiry and logout; API test |
 | FR3 | Semantic musician search | Natural-language discovery UI; `/api/musicians`; real SBERT integration written; model download blocked by egress. Labeled keyword fallback is tested separately. |
 | FR4 | Intelligent recommendations | Similarity-ranked cards, relevance scores and model status; SBERT runtime verification pending model access |

@@ -1,6 +1,6 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { query, pool } from "../server/db.js";
+import { query, pool, hashPassword } from "../server/db.js";
 const base = process.env.TEST_URL || "http://127.0.0.1:3000/api";
 const fixtures = [];
 const uploads = [];
@@ -21,17 +21,22 @@ async function request(url, { method = "GET", body, cookie } = {}) {
 }
 async function register(role) {
   const name = "Integration " + role + " " + Date.now() + Math.random();
-  const r = await request("/auth/register", {
+  const email = `test-${Math.random().toString(36).slice(2)}@lifejam.test`;
+  const row = await query(
+    "INSERT INTO users (name,email,password,role,email_verified) VALUES (?,?,?,?,TRUE)",
+    [name, email, hashPassword("TestPassword2026!"), role],
+  );
+  fixtures.push(row.insertId);
+  if (role === "musician")
+    await query(
+      "INSERT INTO profiles (user_id,genres,skills,portfolio,availability) VALUES (?,JSON_ARRAY(),JSON_ARRAY(),JSON_ARRAY(),JSON_ARRAY())",
+      [row.insertId],
+    );
+  const r = await request("/auth/login", {
     method: "POST",
-    body: {
-      name,
-      email: `test-${Math.random().toString(36).slice(2)}@lifejam.test`,
-      password: "TestPassword2026!",
-      role,
-    },
+    body: { email, password: "TestPassword2026!" },
   });
-  assert.equal(r.status, 201);
-  fixtures.push(r.data.user.id);
+  assert.equal(r.status, 200);
   return { ...r.data.user, cookie: r.cookie };
 }
 let organizer, musician, stranger, admin, bookingId;

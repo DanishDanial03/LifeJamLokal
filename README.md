@@ -37,6 +37,10 @@ HF_HOME=/workspace/.cache/huggingface HF_HUB_DISABLE_XET=1 \
 /workspace/.lifejam-venv/bin/python -m uvicorn semantic.app:app --host 127.0.0.1 --port 8001
 ```
 
+## Google signup and email verification
+
+See [the Windows Google/Gmail setup guide](docs/GOOGLE-AND-GMAIL-SETUP.md). Configure a Google web OAuth client for **Continue with Google** and Gmail SMTP with an App Password for verification emails. New email/password accounts must confirm a one-use, 24-hour email link before sign-in. Existing real accounts also need verification; database migrations retain their records. Demo accounts remain available in demo mode. Live Google/Gmail credentials are not included.
+
 ## Try the workflows
 
 Use **Sign in → Organizer / Musician / Admin** to open a sample account. All sample accounts use `LifeJam2026!` locally:
@@ -62,6 +66,7 @@ npm run build
 npm test
 npm run test:browser
 npm run test:roles
+npm run test:auth-browser
 ```
 
 API integration tests create and clean up their own accounts and exercise authentication, authorization, persisted profiles, unavailable dates, bookings, overlap prevention, completion restrictions, verified reviews, messaging privacy, saved musicians, connections, posts/comments, suspension, moderation, maintenance, export, and logout. They use the configured MySQL database; run them only against development data.
@@ -80,7 +85,7 @@ See [docs/VALIDATION.md](docs/VALIDATION.md) for measured results, [docs/REQUIRE
 
 ## Configuration and real deployment
 
-`.env.example` documents supported variables. The start script reads exported variables; it does not automatically source a file. Node also supports `node --env-file=.env server/index.js` if starting the API directly. Do not commit real credentials.
+`.env.example` documents supported variables. The Node API automatically reads `.env`; the Python service still uses its own terminal environment. Do not commit real credentials.
 
 For real deployment, use a **new database**, `SEED_DEMO=false`, a private `DATABASE_URL`, an HTTPS reverse proxy, and `COOKIE_SECURE=true`. These are concrete changes from the local demo, whose shared administrator password is public by design. Create the first administrator using `npm run admin:create` with `ADMIN_EMAIL`, `ADMIN_NAME`, and `ADMIN_PASSWORD` injected through your shell/environment. The script refuses to overwrite an existing account. Use a durable database volume and upload directory, and take restricted backups (the administrator export excludes password hashes and sessions). The optional `compose.yaml` starts a standalone MySQL instance using your `MYSQL_PASSWORD`; do not run it alongside the local script's container on the same port.
 

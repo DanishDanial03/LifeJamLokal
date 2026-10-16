@@ -67,6 +67,12 @@ import {
 } from "lucide-react";
 import { api, money, date, img } from "./api";
 import "./styles.css";
+import {
+  GoogleButton,
+  VerificationNotice,
+  VerificationPage,
+  GoogleResult,
+} from "./account-access";
 const Context = createContext();
 const useApp = () => useContext(Context);
 const genres = [
@@ -219,6 +225,10 @@ function Modal({ title, subtitle, children, onClose, wide = false }) {
 }
 function App() {
   const [demo, setDemo] = useState(false);
+  const [authOptions, setAuthOptions] = useState({
+    googleSignIn: false,
+    emailVerification: false,
+  });
   const [user, setUser] = useState(null),
     [ready, setReady] = useState(false),
     [route, setRoute] = useState(location.hash.slice(1) || "home"),
@@ -236,11 +246,15 @@ function App() {
       .then(([d, c]) => {
         setUser(d.user);
         setDemo(c.demo);
+        setAuthOptions(c);
       })
       .catch((e) => tell(e.message, true))
       .finally(() => setReady(true));
     const fn = () => {
-      setRoute(location.hash.slice(1) || "home");
+      const next = location.hash.slice(1) || "home";
+      setRoute(next);
+      if (next.startsWith("verify-email") || next.startsWith("auth-result"))
+        setModal(null);
       setMobile(false);
       window.scrollTo(0, 0);
     };
@@ -302,6 +316,7 @@ function App() {
     });
   }
   const value = {
+    authOptions,
     demo,
     user,
     setUser,
@@ -470,7 +485,23 @@ function App() {
           </div>
         </aside>
         <section className="main-content">
-          {page === "home" ? (
+          {page === "verify-email" ? (
+            <VerificationPage
+              token={route.split("/")[1]}
+              onSignIn={() => {
+                location.hash = "home";
+                setModal({ type: "auth" });
+              }}
+            />
+          ) : page === "auth-result" ? (
+            <GoogleResult
+              result={route.slice("auth-result/".length)}
+              onSignIn={() => {
+                location.hash = "home";
+                setModal({ type: "auth" });
+              }}
+            />
+          ) : page === "home" ? (
             <Feed />
           ) : page === "discover" ? (
             <Discover initial={decodeURIComponent(route.slice(9) || "")} />
@@ -1726,11 +1757,13 @@ function ProfilePage({ uid }) {
   );
 }
 function AuthModal({ onClose, initialMode = "login" }) {
-  const { demo: demoEnabled, setUser, tell, refresh } = useApp();
+  const { demo: demoEnabled, authOptions, setUser, tell, refresh } = useApp();
   const [mode, setMode] = useState(initialMode),
     [role, setRole] = useState("organizer"),
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
+  const [email, setEmail] = useState(""),
+    [pendingEmail, setPendingEmail] = useState("");
   async function submit(e) {
     e.preventDefault();
     setBusy(true);
@@ -1741,6 +1774,10 @@ function AuthModal({ onClose, initialMode = "login" }) {
         method: "POST",
         body: { ...b, role },
       });
+      if (d.verificationRequired) {
+        setPendingEmail(d.email);
+        return;
+      }
       setUser(d.user);
       refresh();
       onClose();
@@ -1751,6 +1788,10 @@ function AuthModal({ onClose, initialMode = "login" }) {
       );
     } catch (e) {
       setError(e.message);
+      if (
+        ["EMAIL_NOT_VERIFIED", "VERIFICATION_DELIVERY_FAILED"].includes(e.code)
+      )
+        setPendingEmail(email);
     } finally {
       setBusy(false);
     }
@@ -1806,76 +1847,109 @@ function AuthModal({ onClose, initialMode = "login" }) {
           Join the community
         </button>
       </div>
-      <form onSubmit={submit} className="form-stack">
-        {mode === "register" && (
-          <>
-            <div className="role-picker">
-              {[
-                ["organizer", Briefcase, "I organize events"],
-                ["musician", Mic2, "I make music"],
-              ].map(([r, Icon, label]) => (
-                <button
-                  key={r}
-                  type="button"
-                  className={role === r ? "active" : ""}
-                  onClick={() => setRole(r)}
-                >
-                  <Icon size={22} />
-                  {label}
-                  {role === r && <Check size={14} />}
-                </button>
-              ))}
-            </div>
-            <Field label="Your name">
+      {pendingEmail ? (
+        <VerificationNotice
+          email={pendingEmail}
+          initialError={error}
+          onBack={() => {
+            setPendingEmail("");
+            setMode("login");
+            setError("");
+          }}
+        />
+      ) : (
+        <>
+          <div className="role-picker">
+            {[
+              ["organizer", Briefcase, "I organize events"],
+              ["musician", Mic2, "I make music"],
+            ].map(([r, Icon, label]) => (
+              <button
+                key={r}
+                type="button"
+                className={role === r ? "active" : ""}
+                onClick={() => setRole(r)}
+              >
+                <Icon size={22} />
+                {label}
+                {role === r && <Check size={14} />}
+              </button>
+            ))}
+          </div>
+          <p className="auth-setup-note">
+            Choose your role for a new account. Existing accounts keep their
+            role.
+          </p>
+          <GoogleButton enabled={authOptions.googleSignIn} role={role} />
+          <form onSubmit={submit} className="form-stack">
+            {mode === "register" && (
+              <>
+                <Field label="Your name">
+                  <input
+                    name="name"
+                    placeholder="What should we call you?"
+                    required
+                    maxLength={100}
+                    autoComplete="name"
+                  />
+                </Field>
+              </>
+            )}
+            <Field label="Email address">
               <input
-                name="name"
-                placeholder="What should we call you?"
+                name="email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="you@example.com"
                 required
-                maxLength={100}
-                autoComplete="name"
+                autoComplete="email"
               />
             </Field>
-          </>
-        )}
-        <Field label="Email address">
-          <input
-            name="email"
-            type="email"
-            placeholder="you@example.com"
-            required
-            autoComplete="email"
-          />
-        </Field>
-        <Field
-          label="Password"
-          hint={
-            mode === "register"
-              ? "At least 10 characters. Make it a good one."
-              : null
-          }
-        >
-          <input
-            name="password"
-            type="password"
-            placeholder="Your password"
-            required
-            minLength={mode === "register" ? 10 : 1}
-            maxLength={128}
-            autoComplete={
-              mode === "register" ? "new-password" : "current-password"
-            }
-          />
-        </Field>
-        {error && (
-          <p className="form-error" role="alert">
-            {error}
-          </p>
-        )}
-        <Button type="submit" loading={busy} className="full">
-          {mode === "login" ? "Welcome back" : "Let’s make some noise"}
-          <ArrowUpRight size={17} />
-        </Button>
-      </form>
+            <Field
+              label="Password"
+              hint={
+                mode === "register"
+                  ? "At least 10 characters. Make it a good one."
+                  : null
+              }
+            >
+              <input
+                name="password"
+                type="password"
+                placeholder="Your password"
+                required
+                minLength={mode === "register" ? 10 : 1}
+                maxLength={128}
+                autoComplete={
+                  mode === "register" ? "new-password" : "current-password"
+                }
+              />
+            </Field>
+            {error && (
+              <p className="form-error" role="alert">
+                {error}
+              </p>
+            )}
+            <Button type="submit" loading={busy} className="full">
+              {mode === "login" ? "Welcome back" : "Let’s make some noise"}
+              <ArrowUpRight size={17} />
+            </Button>
+          </form>
+          {mode === "login" && (
+            <button
+              className="resend-link"
+              disabled={!email}
+              onClick={() => {
+                setError("");
+                setPendingEmail(email);
+              }}
+            >
+              Need a new verification email?
+            </button>
+          )}
+        </>
+      )}
       {demoEnabled && (
         <div className="demo-section">
           <span>JUST TAKING A LOOK? TRY A DEMO</span>
