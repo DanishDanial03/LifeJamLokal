@@ -1217,6 +1217,7 @@ app.get(
 app.use("/api", (req, res) =>
   res.status(404).json({ error: "API endpoint not found." }),
 );
+let vite;
 if (process.env.NODE_ENV === "production") {
   app.use(express.static(path.join(root, "dist")));
   app.get("/{*path}", (req, res) =>
@@ -1224,7 +1225,7 @@ if (process.env.NODE_ENV === "production") {
   );
 } else {
   const { createServer } = await import("vite");
-  const vite = await createServer({
+  vite = await createServer({
     server: { middlewareMode: true },
     appType: "spa",
   });
@@ -1240,15 +1241,35 @@ app.use((err, req, res, next) => {
     error: err.status ? err.message : "Something went wrong. Please try again.",
   });
 });
-const server = app.listen(Number(process.env.PORT) || 3000, "0.0.0.0", () =>
-  console.log(
-    `LifeJamLokal running on port ${Number(process.env.PORT) || 3000}`,
-  ),
-);
+const port = Number(process.env.PORT) || 3000;
+async function closeResources() {
+  if (vite) await vite.close();
+  await pool.end();
+}
+const server = app.listen(port, "0.0.0.0", (error) => {
+  if (error) {
+    console.error(
+      error.code === "EADDRINUSE"
+        ? `LifeJamLokal could not start: port ${port} is already in use. Stop the existing website process, then start again.`
+        : `LifeJamLokal could not start: ${error.message}`,
+    );
+    closeResources()
+      .catch(() => {})
+      .finally(() => process.exit(1));
+    return;
+  }
+  console.log(`LifeJamLokal running on port ${port}`);
+});
+let stopping = false;
 for (const signal of ["SIGTERM", "SIGINT"])
-  process.on(signal, () =>
+  process.on(signal, () => {
+    if (stopping) return;
+    stopping = true;
     server.close(async () => {
-      await pool.end();
-      process.exit(0);
-    }),
-  );
+      try {
+        await closeResources();
+      } finally {
+        process.exit(0);
+      }
+    });
+  });

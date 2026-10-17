@@ -86,7 +86,7 @@ The first start adds the verification and Google identity fields/tables automati
 
 | Message | Fix |
 |---|---|
-| Google button disabled | Set both Google client variables in `.env`, then restart Node. |
+| Google button disabled | Set both Google client variables in `.env`, then restart Node from the correct project folder. If another website process still holds port 3000, stop that process first. The updated server reports occupied ports clearly instead of claiming it started. |
 | `redirect_uri_mismatch` | Match the callback URI above exactly, including localhost, port and path. |
 | Access blocked / test user missing | Add the Gmail address to the OAuth app's test users. |
 | Google sign-in expired / could not be verified | Start again from the app. Use the same browser and hostname; the callback needs its original HttpOnly cookie. |
